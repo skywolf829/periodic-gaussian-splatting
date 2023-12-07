@@ -64,7 +64,7 @@ def tensor_to_cdf(t, location, channel_names=None):
         d[ch][:] = t[0,i].detach().cpu().numpy()
     d.close()
 
-f = 16
+f = 8
 g = make_coord_grid([128, 128, 128], "cuda", True)*2
 
 real = torch.exp(-(torch.norm(g, dim=1)**2))*(0.5+0.5*torch.cos(g[:,0]*f))
@@ -78,9 +78,9 @@ print(gaussians_on_each_size)
 for k in range(-gaussians_on_each_size,gaussians_on_each_size+1):    
     center = torch.tensor([k*wavelength, 0., 0.], device="cuda")
     diff = g-center[None,...]
-    diff[:,0] *= f
-    gauss = torch.exp(-(torch.norm(diff, dim=1)**2))
-    result += gauss*torch.exp(-(torch.norm(center)**2))
+    diff[:,0] *= f/1.618
+    gauss = np.exp(-((k*2*torch.pi/f)**2))*torch.exp(-(torch.norm(diff, dim=1)**2))
+    result += gauss
 
 result = result.reshape([128, 128, 128])[None,None,...]
 tensor_to_cdf(result, f"gabor{f}_approx.nc")
