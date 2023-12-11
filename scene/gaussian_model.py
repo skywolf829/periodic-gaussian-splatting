@@ -148,7 +148,10 @@ class GaussianModel:
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
         rots[:, 0] = 1
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 32), 
-                                                     dtype=torch.float, device="cuda"))
+                                            dtype=torch.float, device="cuda") * \
+                                          torch.linspace(1.0, 0.1, 32, 
+                                            dtype=torch.float, device="cuda")[None,...]) 
+                                                     
         #opacities[:,0] = 1.0
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
@@ -203,13 +206,13 @@ class GaussianModel:
 
     def get_topk_waves(self, top=True):
         if(top or True):
-            #coefficients_to_send, indices_to_send = torch.max(
-            #    self.get_opacity, dim=1, keepdim=True)
-            #indices_to_send = indices_to_send.type(torch.int)
-            coefficients_to_send = self.get_opacity[:,10:11]
-            indices_to_send = 10+torch.zeros_like(coefficients_to_send).type(torch.int)
+            coefficients_to_send, indices_to_send = torch.max(
+                self._opacity, dim=1, keepdim=True)
+            indices_to_send = indices_to_send.type(torch.int)
+            #coefficients_to_send = self.get_opacity[:,0:1]
+            #indices_to_send = torch.zeros_like(coefficients_to_send).type(torch.int)
 
-        return coefficients_to_send, indices_to_send
+        return self.opacity_activation(coefficients_to_send), indices_to_send
     
     def save_ply(self, path):
         mkdir_p(os.path.dirname(path))
@@ -231,7 +234,8 @@ class GaussianModel:
         PlyData([el]).write(path)
 
     def reset_opacity(self):
-        opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
+        #opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
+        opacities_new = inverse_sigmoid(self.get_opacity*0.01)
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
 
