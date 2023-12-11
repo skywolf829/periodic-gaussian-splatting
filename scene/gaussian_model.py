@@ -147,9 +147,8 @@ class GaussianModel:
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
         rots[:, 0] = 1
-
-        opacities = inverse_sigmoid(0.1 - 0.05*torch.rand((fused_point_cloud.shape[0], 32), 
-                                                          dtype=torch.float, device="cuda"))
+        opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 32), 
+                                                     dtype=torch.float, device="cuda"))
         #opacities[:,0] = 1.0
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
@@ -207,8 +206,8 @@ class GaussianModel:
             #coefficients_to_send, indices_to_send = torch.max(
             #    self.get_opacity, dim=1, keepdim=True)
             #indices_to_send = indices_to_send.type(torch.int)
-            coefficients_to_send = self.get_opacity[:,0:1]
-            indices_to_send = torch.zeros_like(coefficients_to_send).type(torch.int)
+            coefficients_to_send = self.get_opacity[:,10:11]
+            indices_to_send = 10+torch.zeros_like(coefficients_to_send).type(torch.int)
 
         return coefficients_to_send, indices_to_send
     
