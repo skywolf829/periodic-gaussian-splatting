@@ -204,12 +204,12 @@ class GaussianModel:
         return l
 
     def get_topk_waves(self, top=True):
-        if(top or True):
-            coefficients_to_send, indices_to_send = torch.max(
-                self._opacity, dim=1, keepdim=True)
-            indices_to_send = indices_to_send.type(torch.int)
-            #coefficients_to_send = self._opacity[:,0:1]
-            #indices_to_send = torch.zeros_like(coefficients_to_send).type(torch.int)
+        
+        coefficients_to_send, indices_to_send = torch.max(
+            self._opacity, dim=1, keepdim=True)
+        indices_to_send = indices_to_send.type(torch.int)
+        #coefficients_to_send = self._opacity[:,0:1]
+        #indices_to_send = torch.zeros_like(coefficients_to_send).type(torch.int)
 
         return self.opacity_activation(coefficients_to_send), indices_to_send
     
@@ -460,3 +460,26 @@ class GaussianModel:
         #self._scaling[dim0_idx,0] = self.scaling_inverse_activation(
         #    self.scaling_activation(self._scaling[dim0_idx,0]) * scale_diff)
 
+    def double_top_freq(self, p = 0.05):
+        num_randomized_prims = min(self._opacity.shape[0], max(1,int(p*self._opacity.shape[0])))
+        old_top_coeffs, old_top_idx = self.get_topk_waves()
+
+        dim0_idx = torch.randperm(self._opacity.shape[0], 
+                    device="cuda", dtype=torch.long)[0:num_randomized_prims]
+        
+        old_top_coeffs = old_top_coeffs[dim0_idx,0]
+        old_top_idx = old_top_idx.type(torch.long)[dim0_idx,0]
+        
+        new_top_idx = old_top_idx.clone()
+        criteria = old_top_idx<(self._opacity.shape[1]-2)/2
+        new_top_idx[criteria] += 1
+        new_top_idx[criteria] *= 2
+
+        new_top_coeffs = self.get_opacity[dim0_idx, new_top_idx]
+
+        self._opacity[dim0_idx,new_top_idx] = self.inverse_opacity_activation(old_top_coeffs)
+        self._opacity[dim0_idx,old_top_idx] = self.inverse_opacity_activation(new_top_coeffs)
+
+        self._scaling[dim0_idx[criteria],0] = self.scaling_inverse_activation(
+            self.scaling_activation(self._scaling[dim0_idx[criteria],0]) * \
+                (1+3*torch.rand([dim0_idx[criteria].shape[0]], device="cuda")))
