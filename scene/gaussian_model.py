@@ -151,8 +151,7 @@ class GaussianModel:
                                             dtype=torch.float, device="cuda") * \
                                           torch.linspace(1.0, 0.1, 32, 
                                             dtype=torch.float, device="cuda")[None,...]) 
-                                                     
-        #opacities[:,0] = 1.0
+        
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
@@ -209,7 +208,7 @@ class GaussianModel:
             coefficients_to_send, indices_to_send = torch.max(
                 self._opacity, dim=1, keepdim=True)
             indices_to_send = indices_to_send.type(torch.int)
-            #coefficients_to_send = self.get_opacity[:,0:1]
+            #coefficients_to_send = self._opacity[:,0:1]
             #indices_to_send = torch.zeros_like(coefficients_to_send).type(torch.int)
 
         return self.opacity_activation(coefficients_to_send), indices_to_send
@@ -433,8 +432,31 @@ class GaussianModel:
         self.prune_points(prune_mask)
         pruned = prune_mask.sum()
         torch.cuda.empty_cache()
-        print(f" {self._opacity.shape[0]}: {split} new, {pruned} pruned")
+        #print(f" {self._opacity.shape[0]}: {split} new, {pruned} pruned")
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+
+    def randomize_top_freq(self, p = 0.05):
+        num_randomized_prims = min(self._opacity.shape[0], max(1,int(p*self._opacity.shape[0])))
+        new_top_idx = torch.randint(0, self._opacity.shape[1], 
+                        [num_randomized_prims], 
+                        device="cuda", dtype=torch.long)    
+        old_top_coeffs, old_top_idx = self.get_topk_waves()
+
+        dim0_idx = torch.randperm(self._opacity.shape[0], 
+                    device="cuda", dtype=torch.long)[0:num_randomized_prims]
+        
+        old_top_coeffs = old_top_coeffs[dim0_idx,0]
+        old_top_idx = old_top_idx.type(torch.long)[dim0_idx,0]
+
+        new_top_coeffs = self.get_opacity[dim0_idx, new_top_idx]
+
+        self._opacity[dim0_idx,new_top_idx] = self.inverse_opacity_activation(old_top_coeffs)
+        self._opacity[dim0_idx,old_top_idx] = self.inverse_opacity_activation(new_top_coeffs)
+
+        #scale_diff = (new_top_idx+1) / (old_top_idx+1)
+        #self._scaling[dim0_idx,0] = self.scaling_inverse_activation(
+        #    self.scaling_activation(self._scaling[dim0_idx,0]) * scale_diff)
+

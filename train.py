@@ -93,7 +93,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         loss.backward()
 
-        iter_end.record()
+        iter_end.record()   
 
         with torch.no_grad():
             # Progress bar
@@ -124,6 +124,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 
+            if iteration % 500 == 0 and iteration > 3000 and iteration < 25000:
+                gaussians.randomize_top_freq()
+
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
@@ -132,6 +135,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+
+    print(f"Final # gaussians: {gaussians._opacity.shape[0]}")
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
