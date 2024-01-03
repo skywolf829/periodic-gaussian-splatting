@@ -81,7 +81,6 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         uid = intr.id
         R = np.transpose(qvec2rotmat(extr.qvec))
         T = np.array(extr.tvec)
-
         if intr.model=="SIMPLE_PINHOLE":
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)
@@ -91,6 +90,15 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
             focal_length_y = intr.params[1]
             FovY = focal2fov(focal_length_y, height)
             FovX = focal2fov(focal_length_x, width)
+        elif intr.model=="SIMPLE_RADIAL":
+            # from https://github.com/colmap/colmap/blob/main/src/colmap/sensor/models.h#L97
+            # Parameter list is expected in the following order:
+            # f, cx, cy, k
+            focal_length_x = intr.params[0]
+            k = intr.params[3] # TBD, ignored for now
+            FovY = focal2fov(focal_length_x, height)
+            FovX = focal2fov(focal_length_x, width)
+
         else:
             assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
 
@@ -199,7 +207,18 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             image_path = os.path.join(path, cam_name)
             image_name = Path(cam_name).stem
-            image = Image.open(image_path)
+            try:
+                image = Image.open(image_path)
+            except:
+                #print(f"Couldn't open {image_path}")
+                try:
+                    cam_name = os.path.join(path, frame["file_path"])
+                    image_path = os.path.join(path, cam_name)
+                    image = Image.open(image_path)
+                    #print(f"Opened {image_path}")
+                except:
+                    print(f"Couldn't load image file {image_path}. Exiting.")
+                    quit()
 
             im_data = np.array(image.convert("RGBA"))
 

@@ -43,6 +43,8 @@ class GaussianModel:
 
     def __init__(self, sh_degree : int):
         self.active_sh_degree = 0
+        self.max_periodic_elements = 4
+        self.DC_only = True
         self.max_sh_degree = sh_degree  
         self._xyz = torch.empty(0)
         self._features_dc = torch.empty(0)
@@ -147,9 +149,9 @@ class GaussianModel:
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
         rots[:, 0] = 1
-        opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 32), 
+        opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], self.max_periodic_elements), 
                                             dtype=torch.float, device="cuda") * \
-                                          torch.linspace(1.0, 0.1, 32, 
+                                          torch.linspace(1.0, 0.1, self.max_periodic_elements, 
                                             dtype=torch.float, device="cuda")[None,...]) 
         
 
@@ -203,15 +205,6 @@ class GaussianModel:
             l.append('rot_{}'.format(i))
         return l
 
-    def get_topk_waves(self, top=True):
-        
-        coefficients_to_send, indices_to_send = torch.max(
-            self._opacity, dim=1, keepdim=True)
-        indices_to_send = indices_to_send.type(torch.int)
-        #coefficients_to_send = self._opacity[:,0:1]
-        #indices_to_send = torch.zeros_like(coefficients_to_send).type(torch.int)
-
-        return self.opacity_activation(coefficients_to_send), indices_to_send
     
     def save_ply(self, path):
         mkdir_p(os.path.dirname(path))
@@ -372,6 +365,36 @@ class GaussianModel:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
+    def densify_and_increase_periodicity(self, grads, grad_threshold, scene_extent):
+        n_init_points = self.get_xyz.shape[0]
+        padded_grad = torch.zeros((n_init_points), device="cuda")
+        padded_grad[:grads.shape[0]] = grads.squeeze()
+        selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
+        selected_pts_mask = torch.logical_and(selected_pts_mask,
+            torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
+        
+        top_coeffs, top_idx = self.get_topk_waves()
+        top_coeffs = top_coeffs[selected_pts_mask, 0]
+        top_idx = top_idx.type(torch.long)[selected_pts_mask, 0]
+
+        freq_increase = 3+torch.randint_like(top_idx, 2)
+        new_top_idx = top_idx+freq_increase
+        new_top_idx[new_top_idx>=self._opacity.shape[1]] = top_idx[new_top_idx>=self._opacity.shape[1]]
+
+        new_opacities = self._opacity[selected_pts_mask]
+        new_opacities[:,new_top_idx] = self.inverse_opacity_activation(top_coeffs)        
+        new_opacities[:,top_idx] = self.inverse_opacity_activation(top_coeffs/4)
+        
+        new_xyz = self._xyz[selected_pts_mask]
+        new_features_dc = self._features_dc[selected_pts_mask]
+        new_features_rest = self._features_rest[selected_pts_mask]
+        new_scaling = self._scaling[selected_pts_mask]
+        #new_scaling[:,0] *= freq_increase
+        new_rotation = self._rotation[selected_pts_mask]
+        
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, 
+                                   new_opacities, new_scaling, new_rotation)
+
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
         # Extract points that satisfy the gradient condition
@@ -379,10 +402,10 @@ class GaussianModel:
         padded_grad[:grads.shape[0]] = grads.squeeze()
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
+            torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
 
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
-        means =torch.zeros((stds.size(0), 3),device="cuda")
+        means = torch.zeros((stds.size(0), 3),device="cuda")
         samples = torch.normal(mean=means, std=stds)
         rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N,1,1)
         new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[selected_pts_mask].repeat(N, 1)
@@ -413,22 +436,29 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, 
                                    new_opacities, new_scaling, new_rotation)
-
+        
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
-        
+        _, f = self.get_topk_waves()
+        prims_per_side = torch.round(2.*f/torch.pi - 1) / 2.
+        prims_per_side[prims_per_side<0] = 0
+        prims_per_side = prims_per_side.type(torch.long)
+        n_prims = 1 + 2*prims_per_side
+
+        grads = grads / n_prims
         #print( torch.abs(grads).mean())
         before = self._opacity.shape[0]
         self.densify_and_clone(grads, max_grad, extent)
-        self.densify_and_split(grads, max_grad, extent)
+        self.densify_and_split(grads, max_grad, extent, N=2)
+        #self.densify_and_increase_periodicity(grads, max_grad, extent)
         split = self._opacity.shape[0] - before        
 
-        prune_mask = (self.get_topk_waves()[0] < min_opacity).squeeze()
-        if max_screen_size:
-            big_points_vs = self.max_radii2D > max_screen_size
-            big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
-            prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+        prune_mask = (self.get_topk_waves()[0][:,0] < min_opacity).squeeze()
+        #if max_screen_size:
+        #    big_points_vs = self.max_radii2D > max_screen_size
+        #    big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
+        #    prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
         pruned = prune_mask.sum()
         torch.cuda.empty_cache()
@@ -440,7 +470,7 @@ class GaussianModel:
 
     def randomize_top_freq(self, p = 0.05):
         num_randomized_prims = min(self._opacity.shape[0], max(1,int(p*self._opacity.shape[0])))
-        new_top_idx = torch.randint(0, self._opacity.shape[1], 
+        new_top_idx = torch.randint(0, self._opacity.shape[1]-1, 
                         [num_randomized_prims], 
                         device="cuda", dtype=torch.long)    
         old_top_coeffs, old_top_idx = self.get_topk_waves()
@@ -451,14 +481,16 @@ class GaussianModel:
         old_top_coeffs = old_top_coeffs[dim0_idx,0]
         old_top_idx = old_top_idx.type(torch.long)[dim0_idx,0]
 
-        new_top_coeffs = self.get_opacity[dim0_idx, new_top_idx]
-
         self._opacity[dim0_idx,new_top_idx] = self.inverse_opacity_activation(old_top_coeffs)
-        self._opacity[dim0_idx,old_top_idx] = self.inverse_opacity_activation(new_top_coeffs)
+        self._opacity[dim0_idx,old_top_idx] = self.inverse_opacity_activation(old_top_coeffs/2)
 
-        #scale_diff = (new_top_idx+1) / (old_top_idx+1)
-        #self._scaling[dim0_idx,0] = self.scaling_inverse_activation(
-        #    self.scaling_activation(self._scaling[dim0_idx,0]) * scale_diff)
+        optimizable_tensors = self.replace_tensor_to_optimizer(self._opacity, "opacity")
+        self._opacity = optimizable_tensors["opacity"]
+
+    def randomize_all_freq(self):
+        opacities_new = self.inverse_opacity_activation(torch.rand_like(self._opacity))
+        optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
+        self._opacity = optimizable_tensors["opacity"]
 
     def double_top_freq(self, p = 0.05):
         num_randomized_prims = min(self._opacity.shape[0], max(1,int(p*self._opacity.shape[0])))
@@ -483,3 +515,16 @@ class GaussianModel:
         self._scaling[dim0_idx[criteria],0] = self.scaling_inverse_activation(
             self.scaling_activation(self._scaling[dim0_idx[criteria],0]) * \
                 (1+3*torch.rand([dim0_idx[criteria].shape[0]], device="cuda")))
+        
+    def get_topk_waves(self, top=True):
+        
+        if self.DC_only:
+            coefficients_to_send = self._opacity[:,0:1]
+            indices_to_send = torch.zeros_like(coefficients_to_send).type(torch.int)
+        else:
+            coefficients_to_send, indices_to_send = torch.max(
+                self._opacity, dim=1, keepdim=True)
+            indices_to_send = indices_to_send.type(torch.int)
+
+        return self.opacity_activation(coefficients_to_send), indices_to_send
+    
