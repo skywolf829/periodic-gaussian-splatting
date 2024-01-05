@@ -124,15 +124,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 
-            #if iteration == 1000:
-            #    gaussians.DC_only = False
-            #    gaussians.randomize_all_freq()
+            if iteration == 1000:
+                gaussians.DC_only = False
+                gaussians.randomize_all_freq()
 
-            #if iteration % 100 == 0 and iteration > 3500 and iteration < 25000:
-                #gaussians.randomize_top_freq(p=0.05)
+            #if iteration % 150 == 0 and iteration > 1500 and iteration < 25000:
+            #    gaussians.randomize_top_freq(p=0.05)
 
             # Optimizer step
             if iteration < opt.iterations:
+                #gaussians._xyz.grad = None
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
 

@@ -449,8 +449,8 @@ class GaussianModel:
         grads = grads / n_prims
         #print( torch.abs(grads).mean())
         before = self._opacity.shape[0]
-        self.densify_and_clone(grads, max_grad, extent)
-        self.densify_and_split(grads, max_grad, extent, N=2)
+        #self.densify_and_clone(grads, max_grad, extent)
+        #self.densify_and_split(grads, max_grad, extent, N=2)
         #self.densify_and_increase_periodicity(grads, max_grad, extent)
         split = self._opacity.shape[0] - before        
 

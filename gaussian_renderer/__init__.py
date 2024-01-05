@@ -57,6 +57,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.
     scales = None
+    scales_pre = None
     rotations = None
     cov3D_precomp = None
     if pipe.compute_cov3D_python:
@@ -64,6 +65,12 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     else:
         scales = pc.get_scaling
         rotations = pc.get_rotation
+
+    # scale the x-axis since it gets scaled down with the periodicity
+    #ones = torch.ones_like(frequency_coefficient_indices).repeat(1, 2)
+    #scales_pre = scales * (torch.cat([1+2*frequency_coefficient_indices, 
+    #                        ones], dim=1))
+    
 
     # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
